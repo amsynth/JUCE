@@ -1133,81 +1133,38 @@ namespace DisplayHelpers
         return 96.0;
     }
 
-    static double getDisplayScale (const String& name, double dpi)
+    static double getDisplayScale (::Display* display, const String& name, double dpi)
     {
+        // amsynth: modified this for better integration with KDE's
+        // "Legacy applications (X11): Apply scaling themselves" setting which sets
+        // "Gdk/WindowScalingFactor" to 1 but sets Xft.dpi to 96 * scale
+
+        if (const char *scale = getenv("GDK_SCALE"))
+        {
+            int integerValue = atoi(scale);
+            if (integerValue > 0)
+                return integerValue;
+        }
+
         if (auto* xSettings = XWindowSystem::getInstance()->getXSettings())
         {
             auto windowScalingFactorSetting = xSettings->getSetting (XWindowSystem::getWindowScalingFactorSettingName());
 
             if (windowScalingFactorSetting.isValid()
-                && windowScalingFactorSetting.integerValue > 0)
+                && windowScalingFactorSetting.integerValue > 1)
             {
                 return (double) windowScalingFactorSetting.integerValue;
             }
         }
 
-        if (name.isNotEmpty())
+        if (const char *stringValue = XGetDefault(display, "Xft", "dpi"))
         {
-            // Ubuntu and derived distributions now save a per-display scale factor as a configuration
-            // variable. This can be changed in the Monitor system settings panel.
-            ChildProcess dconf;
-
-            if (File ("/usr/bin/dconf").existsAsFile()
-                && dconf.start ("/usr/bin/dconf read /com/ubuntu/user-interface/scale-factor", ChildProcess::wantStdOut))
-            {
-                if (dconf.waitForProcessToFinish (200))
-                {
-                    auto jsonOutput = dconf.readAllProcessOutput().replaceCharacter ('\'', '"');
-
-                    if (dconf.getExitCode() == 0 && jsonOutput.isNotEmpty())
-                    {
-                        auto jsonVar = JSON::parse (jsonOutput);
-
-                        if (auto* object = jsonVar.getDynamicObject())
-                        {
-                            auto scaleFactorVar = object->getProperty (name);
-
-                            if (! scaleFactorVar.isVoid())
-                            {
-                                auto scaleFactor = ((double) scaleFactorVar) / 8.0;
-
-                                if (scaleFactor > 0.0)
-                                    return scaleFactor;
-                            }
-                        }
-                    }
-                }
-            }
+            int integerValue = atoi(stringValue);
+            if (integerValue > 96.0)
+                return integerValue / 96.0;
         }
 
-        {
-            // Other gnome based distros now use gsettings for a global scale factor
-            ChildProcess gsettings;
-
-            if (File ("/usr/bin/gsettings").existsAsFile()
-                && gsettings.start ("/usr/bin/gsettings get org.gnome.desktop.interface scaling-factor", ChildProcess::wantStdOut))
-            {
-                if (gsettings.waitForProcessToFinish (200))
-                {
-                    auto gsettingsOutput = StringArray::fromTokens (gsettings.readAllProcessOutput(), true);
-
-                    if (gsettingsOutput.size() >= 2 && gsettingsOutput[1].length() > 0)
-                    {
-                        auto scaleFactor = gsettingsOutput[1].getDoubleValue();
-
-                        if (scaleFactor > 0.0)
-                            return scaleFactor;
-
-                        return 1.0;
-                    }
-                }
-            }
-        }
-
-        // If no scale factor is set by GNOME or Ubuntu then calculate from monitor dpi
-        // We use the same approach as chromium which simply divides the dpi by 96
-        // and then rounds the result
-        return round (dpi / 96.0);
+        return 1.0;
     }
 
    #if JUCE_USE_XINERAMA
@@ -2570,7 +2527,7 @@ Array<Displays::Display> XWindowSystem::findDisplays (float masterScale) const
                                             d.dpi = ((static_cast<double> (crtc->width)  * 25.4 * 0.5) / static_cast<double> (output->mm_width))
                                                   + ((static_cast<double> (crtc->height) * 25.4 * 0.5) / static_cast<double> (output->mm_height));
 
-                                        auto scale = DisplayHelpers::getDisplayScale (output->name, d.dpi);
+                                        auto scale = DisplayHelpers::getDisplayScale (display, output->name, d.dpi);
                                         scale = (scale <= 0.1 || ! JUCEApplicationBase::isStandaloneApp()) ? 1.0 : scale;
 
                                         d.scale = masterScale * scale;
